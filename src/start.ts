@@ -6,12 +6,12 @@ import { createLinqClient } from "./linq.js";
 /**
  * End-to-end starter:
  * 1. Start the webhook server
- * 2. Open a localtunnel public HTTPS URL
+ * 2. Open a Cloudflare quick tunnel (public HTTPS)
  * 3. Subscribe it to message.received and save signing_secret to .env
- * 4. Print inbound-first instructions
+ * 4. Start the poll fallback
+ * 5. Print inbound-first instructions
  *
- * The server re-reads LINQ_WEBHOOK_SECRET from .env on each request, so no restart
- * is needed after the subscription is created.
+ * The server re-reads LINQ_WEBHOOK_SECRET from .env on each request.
  */
 function upsertEnv(key: string, value: string) {
   const envPath = ".env";
@@ -47,15 +47,17 @@ async function waitForHealth(port: number, attempts = 40): Promise<void> {
 
 function startTunnel(port: number): Promise<{ url: string; child: ReturnType<typeof spawn> }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("npx", ["--yes", "localtunnel", "--port", String(port)], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "cloudflared",
+      ["tunnel", "--url", `http://127.0.0.1:${port}`],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
 
     let settled = false;
     const onData = (buf: Buffer) => {
       const text = buf.toString();
-      process.stdout.write(text);
-      const match = text.match(/https:\/\/[a-z0-9-]+\.loca\.lt/);
+      process.stderr.write(text);
+      const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
       if (match && !settled) {
         settled = true;
         resolve({ url: match[0], child });
@@ -68,11 +70,11 @@ function startTunnel(port: number): Promise<{ url: string; child: ReturnType<typ
       if (!settled) reject(err);
     });
     child.on("exit", (code) => {
-      if (!settled) reject(new Error(`localtunnel exited early (${code})`));
+      if (!settled) reject(new Error(`cloudflared exited early (${code})`));
     });
 
     setTimeout(() => {
-      if (!settled) reject(new Error("Timed out waiting for localtunnel URL"));
+      if (!settled) reject(new Error("Timed out waiting for cloudflared URL"));
     }, 60_000);
   });
 }
@@ -93,7 +95,7 @@ async function createFreshSubscription(publicBase: string) {
   }
 
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= 8; attempt++) {
+  for (let attempt = 1; attempt <= 12; attempt++) {
     try {
       const created = await client.webhookSubscriptions.create({
         target_url: targetUrl,
@@ -109,8 +111,8 @@ async function createFreshSubscription(publicBase: string) {
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`Subscribe attempt ${attempt}/8 failed: ${msg}`);
-      await new Promise((r) => setTimeout(r, 3000));
+      console.warn(`Subscribe attempt ${attempt}/12 failed: ${msg}`);
+      await new Promise((r) => setTimeout(r, 4000));
     }
   }
   throw lastErr;
@@ -134,27 +136,27 @@ async function main() {
 
   await createFreshSubscription(publicUrl);
 
+  const poller = spawn("npx", ["tsx", "src/poll.ts"], {
+    stdio: "inherit",
+    env: { ...process.env },
+  });
+
   const shutdown = (code = 0) => {
-    try {
-      server.kill("SIGTERM");
-    } catch {
-      // ignore
-    }
-    try {
-      tunnel.kill("SIGTERM");
-    } catch {
-      // ignore
+    for (const child of [server, tunnel, poller]) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
     }
     process.exit(code);
   };
   process.on("SIGINT", () => shutdown(0));
   process.on("SIGTERM", () => shutdown(0));
   tunnel.on("exit", () => {
-    console.error("Tunnel exited");
-    shutdown(1);
+    console.error("Tunnel exited — poll fallback still covers inbound replies");
   });
   server.on("exit", (code, signal) => {
-    // Ignore expected signals during controlled shutdown.
     if (signal === "SIGTERM" || signal === "SIGINT") return;
     console.error(`Server exited (${code})`);
     shutdown(code ?? 1);
@@ -175,6 +177,7 @@ async function main() {
        npm run send -- <yourPhoneE164>
 
   Webhook: ${publicUrl}/webhook?version=2026-02-03
+  Fallback: polling chats every 5s if webhooks flake
 ============================================================
 `);
 
