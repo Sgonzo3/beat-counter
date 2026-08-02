@@ -1,0 +1,28 @@
+{
+  "name": "linq-imessage-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal Linq sandbox agent: inbound webhook + iMessage replies",
+  "scripts": {
+    "start": "tsx src/start.ts",
+    "server": "tsx src/server.ts",
+    "subscribe": "tsx src/subscribe.ts",
+    "send": "tsx src/send.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@linqapp/sdk": "^0.32.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.2",
+    "tsx": "^4.23.4",
+    "typescript": "^7.0.2"
+  }
+}
