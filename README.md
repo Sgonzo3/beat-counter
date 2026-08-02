@@ -24,7 +24,7 @@ npm start
 
 This will:
 
-1. Open a public Cloudflare tunnel to your local webhook server
+1. Open a public [localtunnel](https://localtunnel.github.io/www/) URL to your local webhook server
 2. `POST /api/partner/v3/webhook-subscriptions` for `message.received`
 3. Print your Linq number — **text it from your iPhone first**
 4. Auto-reply with `Hello from my agent!`, then a follow-up (may include a link)
