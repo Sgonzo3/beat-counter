@@ -54,34 +54,119 @@ def extract_url(text: str) -> str | None:
     return m.group(0).rstrip(").,]>'\"") if m else None
 
 
+def http_get(url: str, timeout: int = 20) -> bytes:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; LinqBpmAgent/1.0)",
+            "Accept": "*/*",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
 def spotify_oembed_title(url: str) -> str | None:
     endpoint = "https://open.spotify.com/oembed?url=" + urllib.parse.quote(url, safe="")
     try:
-        with urllib.request.urlopen(endpoint, timeout=15) as resp:
-            data = json.loads(resp.read().decode())
+        data = json.loads(http_get(endpoint).decode())
         title = data.get("title")
         return str(title).strip() if title else None
     except Exception:
         return None
 
 
-def resolve_download_target(url: str) -> tuple[str, str | None]:
-    """Return (yt-dlp target, display title hint)."""
-    if SPOTIFY_RE.search(url):
-        title = spotify_oembed_title(url)
-        if not title:
-            die("Could not resolve Spotify track title via oEmbed")
-        # Spotify audio isn't downloadable via their API; search YouTube.
-        return f"ytsearch1:{title}", title
-    if YOUTUBE_RE.search(url) or "youtube.com" in url or "youtu.be" in url:
-        return url, None
-    # SoundCloud and other yt-dlp extractors work as a direct URL.
-    if url.startswith("http"):
-        return url, None
-    die(f"Unsupported URL (need YouTube, YouTube Music, or Spotify track): {url}")
+def spotify_embed_meta(track_url: str) -> dict:
+    """Pull title/artists + 30s preview URL from Spotify's public embed page."""
+    m = SPOTIFY_RE.search(track_url)
+    if not m:
+        return {}
+    track_id = m.group(1)
+    embed = f"https://open.spotify.com/embed/track/{track_id}"
+    try:
+        html = http_get(embed).decode("utf-8", "ignore")
+    except Exception as err:
+        return {"error": str(err)}
+
+    preview = None
+    pm = re.search(r"https://p\.scdn\.co/mp3-preview/[a-zA-Z0-9]+", html)
+    if pm:
+        preview = pm.group(0)
+    else:
+        am = re.search(r'"audioPreview"\s*:\s*\{\s*"url"\s*:\s*"([^"]+)"', html)
+        if am:
+            preview = am.group(1)
+
+    title = None
+    artists: list[str] = []
+    nm = re.search(r'"name"\s*:\s*"([^"]+)"\s*,\s*"uri"\s*:\s*"spotify:track:', html)
+    if nm:
+        title = nm.group(1)
+    for amatch in re.finditer(r'"name"\s*:\s*"([^"]+)"\s*,\s*"uri"\s*:\s*"spotify:artist:', html):
+        artists.append(amatch.group(1))
+
+    display = title or spotify_oembed_title(track_url) or "Spotify track"
+    if artists:
+        display = f"{', '.join(dict.fromkeys(artists))} — {display}"
+
+    return {
+        "title": display,
+        "preview_url": preview,
+        "track_id": track_id,
+        "partial": True,  # 30s preview, not full track
+    }
 
 
-def download_audio(target: str, out_dir: Path) -> tuple[Path, dict]:
+def cookies_path() -> Path | None:
+    raw = os.environ.get("YTDLP_COOKIES", "").strip()
+    candidates = []
+    if raw:
+        candidates.append(Path(raw))
+    candidates.append(Path("/workspace/cookies.txt"))
+    for path in candidates:
+        if path.exists() and path.stat().st_size > 0:
+            return path
+    return None
+
+
+def ffmpeg_to_wav(src: Path, dst: Path) -> None:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(src),
+        "-ac",
+        "1",
+        "-ar",
+        "44100",
+        str(dst),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0 or not dst.exists():
+        die(f"ffmpeg failed: {(proc.stderr or '')[-400:]}")
+
+
+def download_spotify_preview(track_url: str, out_dir: Path) -> tuple[Path, dict] | None:
+    meta = spotify_embed_meta(track_url)
+    preview = meta.get("preview_url")
+    if not preview:
+        return None
+    mp3_path = out_dir / "preview.mp3"
+    wav_path = out_dir / "track.wav"
+    try:
+        mp3_path.write_bytes(http_get(preview, timeout=30))
+    except Exception as err:
+        die(f"Failed to download Spotify preview: {err}")
+    ffmpeg_to_wav(mp3_path, wav_path)
+    return wav_path, {
+        "title": meta.get("title"),
+        "webpage_url": track_url,
+        "partial": True,
+        "note": "Analyzed Spotify 30s preview (full-track tempo map unavailable without YouTube cookies)",
+    }
+
+
+def download_ytdlp(target: str, out_dir: Path) -> tuple[Path, dict]:
     out_tmpl = str(out_dir / "track.%(ext)s")
     cmd = [
         "yt-dlp",
@@ -95,14 +180,12 @@ def download_audio(target: str, out_dir: Path) -> tuple[Path, dict]:
         out_tmpl,
         "--print-json",
         "--no-progress",
-        # Cap length for hackathon latency — first 6 minutes is enough for BPM.
         "--download-sections",
         "*0:00-6:00",
     ]
-    cookies = os.environ.get("YTDLP_COOKIES", "").strip()
-    if cookies and Path(cookies).exists():
-        cmd.extend(["--cookies", cookies])
-    # Helps on some hosts when YouTube serves JS challenges.
+    cookies = cookies_path()
+    if cookies:
+        cmd.extend(["--cookies", str(cookies)])
     deno = Path.home() / ".deno" / "bin" / "deno"
     if deno.exists():
         cmd.extend(["--js-runtimes", f"deno:{deno}"])
@@ -116,11 +199,12 @@ def download_audio(target: str, out_dir: Path) -> tuple[Path, dict]:
         if "Sign in to confirm" in err or "not a bot" in err:
             die(
                 "YouTube blocked the download (bot check). "
-                "Export cookies to a Netscape file and set YTDLP_COOKIES=/path/to/cookies.txt"
+                "Put Netscape cookies in /workspace/cookies.txt "
+                "(or set YTDLP_COOKIES). Spotify links still work via 30s preview."
             )
         die(f"yt-dlp failed: {err}")
 
-    meta = {}
+    meta: dict = {}
     for line in proc.stdout.splitlines():
         line = line.strip()
         if line.startswith("{") and '"id"' in line:
@@ -131,11 +215,37 @@ def download_audio(target: str, out_dir: Path) -> tuple[Path, dict]:
 
     wavs = list(out_dir.glob("track.*"))
     if not wavs:
-        # download-sections can change naming; pick any audio file
-        wavs = [p for p in out_dir.iterdir() if p.suffix.lower() in {".wav", ".m4a", ".mp3", ".webm", ".opus"}]
+        wavs = [
+            p
+            for p in out_dir.iterdir()
+            if p.suffix.lower() in {".wav", ".m4a", ".mp3", ".webm", ".opus"}
+        ]
     if not wavs:
         die("Download succeeded but no audio file found")
     return wavs[0], meta
+
+
+def acquire_audio(url: str, out_dir: Path) -> tuple[Path, dict]:
+    """Resolve a song URL to a local wav + metadata."""
+    if SPOTIFY_RE.search(url):
+        preview = download_spotify_preview(url, out_dir)
+        if preview:
+            return preview
+        title = spotify_oembed_title(url)
+        if not title:
+            die("Could not resolve Spotify track (no preview / title)")
+        # Fallback: YouTube search (needs cookies on this host).
+        path, meta = download_ytdlp(f"ytsearch1:{title}", out_dir)
+        meta.setdefault("title", title)
+        return path, meta
+
+    if YOUTUBE_RE.search(url) or "youtube.com" in url or "youtu.be" in url:
+        return download_ytdlp(url, out_dir)
+
+    if url.startswith("http"):
+        return download_ytdlp(url, out_dir)
+
+    die(f"Unsupported URL (need YouTube, YouTube Music, or Spotify track): {url}")
 
 
 def format_ts(seconds: float) -> str:
@@ -245,6 +355,10 @@ def format_reply(result: dict) -> str:
             lines.append(f"  {c['label']} → {c['bpm']} BPM")
         if len(changes) > 12:
             lines.append(f"  …and {len(changes) - 12} more")
+    if result.get("partial"):
+        lines.append("Note: based on Spotify’s 30s preview, not the full track.")
+    elif result.get("note"):
+        lines.append(str(result["note"]))
     return "\n".join(lines)
 
 
@@ -264,20 +378,22 @@ def main() -> None:
         source_url = url or raw
         audio_url = source_url
 
+        partial = False
+        note = None
         if url:
-            target, title_hint = resolve_download_target(url)
-            audio_path, meta = download_audio(target, work)
+            audio_path, meta = acquire_audio(url, work)
             title = (
-                title_hint
+                meta.get("title")
                 or meta.get("track")
-                or meta.get("title")
                 or meta.get("fulltitle")
                 or "Track"
             )
             artist = meta.get("artist") or meta.get("uploader")
-            if artist and artist not in title:
+            if artist and isinstance(artist, str) and artist not in title:
                 title = f"{artist} — {title}"
-            audio_url = meta.get("webpage_url") or target
+            audio_url = meta.get("webpage_url") or meta.get("preview_url") or url
+            partial = bool(meta.get("partial"))
+            note = meta.get("note")
         else:
             audio_path = Path(raw)
             if not audio_path.exists():
@@ -289,8 +405,11 @@ def main() -> None:
             "title": title,
             "source_url": source_url,
             "audio_url": audio_url,
+            "partial": partial,
             **analysis,
         }
+        if note:
+            result["note"] = note
         result["reply"] = format_reply(result)
 
         if args.json_only:
