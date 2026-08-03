@@ -26,13 +26,15 @@ pip3 install -r requirements.txt   # essentia, yt-dlp, numpy
 # ffmpeg required on PATH
 ```
 
-### YouTube bot checks
+### YouTube bot checks / Spotify preview
 
 Some hosts (including many cloud VMs) get blocked by YouTube. Export browser cookies to a Netscape `cookies.txt` and set:
 
 ```bash
-YTDLP_COOKIES=/absolute/path/to/cookies.txt
+YTDLP_COOKIES=/workspace/cookies.txt
 ```
+
+Without cookies, **Spotify links still work** via the public 30s preview (`p.scdn.co`) — enough for average BPM, with a note that the full-track tempo map isn’t available.
 
 ## Run
 
