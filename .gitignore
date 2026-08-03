@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+tmp/
+cookies.txt
+*.wav
+*.m4a
