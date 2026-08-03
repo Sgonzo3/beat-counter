@@ -1,54 +1,75 @@
-# Linq iMessage agent (sandbox)
+# Linq BPM agent (sandbox)
 
-Minimal TypeScript agent that sends and receives iMessages via the [Linq Partner API](https://docs.linqapp.com/getting-started/quickstart/).
+Text a YouTube / YouTube Music / Spotify track link to your Linq number and get back **average BPM** plus **timestamps for major tempo changes**, analyzed locally with [Essentia](https://essentia.upf.edu/).
 
-## Sandbox rules this project respects
+## How it works
 
-- **Inbound-first** — someone must text your Linq number before the agent messages them.
-- **No links on first outbound** — the first reply is plain text; a link is sent only in a follow-up after the chat exists.
-- Up to 100 contacts; number active 7 days; unlimited messages.
+1. Inbound iMessage via Linq webhook (or 5s poll fallback)
+2. Detect song URL
+3. Download audio with `yt-dlp` (Spotify → oEmbed title → YouTube search)
+4. Analyze with Essentia `RhythmExtractor2013`
+5. Reply over Linq with avg BPM + change timeline
+
+## Sandbox rules
+
+- **Inbound-first** — text the Linq number before the agent can message you
+- **No links on first outbound** — first reply is plain text; analysis replies come after
+- Up to 100 contacts; number active 7 days; unlimited messages
 
 ## Setup
 
 ```bash
 cp .env.example .env
-# Edit .env with LINQ_API_KEY and LINQ_PHONE_NUMBER from the sandbox dashboard
+# LINQ_API_KEY + LINQ_PHONE_NUMBER from https://dashboard.linqapp.com/sandbox-signup
 npm install
+pip3 install -r requirements.txt   # essentia, yt-dlp, numpy
+# ffmpeg required on PATH
 ```
 
-## Run end-to-end
+### YouTube bot checks
+
+Some hosts (including many cloud VMs) get blocked by YouTube. Export browser cookies to a Netscape `cookies.txt` and set:
+
+```bash
+YTDLP_COOKIES=/absolute/path/to/cookies.txt
+```
+
+## Run
 
 ```bash
 npm start
 ```
 
-This will:
+Then text your Linq number a track link, e.g.:
 
-1. Open a public Cloudflare quick tunnel to your local webhook server
-2. `POST /api/partner/v3/webhook-subscriptions` for `message.received`
-3. Start a poll fallback (in case the tunnel flakes)
-4. Print your Linq number — **text it from your iPhone first**
-5. Auto-reply with `Hello from my agent!`, then a follow-up (may include a link)
+- `https://www.youtube.com/watch?v=…`
+- `https://music.youtube.com/watch?v=…`
+- `https://open.spotify.com/track/…`
 
-## Manual send (after inbound)
-
-Uses `POST /api/partner/v3/chats`:
+### Analyze locally (no Linq)
 
 ```bash
-npm run send -- +1YOURPHONE "Hello from my agent!"
-```
-
-Follow-up with a link once you have a chat id:
-
-```bash
-npm run send -- +1YOURPHONE "https://docs.linqapp.com" --follow-up <chat_id>
+npm run analyze -- https://soundcloud.com/forss/flickermood
+npm run analyze -- ./song.wav
 ```
 
 ## Scripts
 
 | Script | What it does |
 |--------|----------------|
-| `npm start` | Tunnel + webhook subscribe + server |
+| `npm start` | Tunnel + webhook + poll fallback |
 | `npm run server` | Webhook server only |
-| `npm run subscribe` | Create webhook subscription for `PUBLIC_WEBHOOK_URL` |
-| `npm run send` | Send via `POST /v3/chats` or follow-up message |
+| `npm run poll` | Poll chats for inbound (fallback) |
+| `npm run analyze` | Run Essentia BPM analysis CLI |
+| `npm run send` | Manual `POST /v3/chats` send |
+| `npm run subscribe` | Create webhook subscription |
+
+## Example reply
+
+```
+Artist — Track Title
+Avg BPM: 148.0 (confidence 2.11)
+Major BPM changes:
+  0:00 → 147.7 BPM
+  3:27 → 107.7 BPM
+```

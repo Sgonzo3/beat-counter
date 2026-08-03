@@ -1,21 +1,12 @@
 import express from "express";
 import type { Request, Response } from "express";
-import { config, OPT_OUT_KEYWORDS, containsUrl } from "./config.js";
+import { config } from "./config.js";
 import { createLinqClient } from "./linq.js";
+import { handleInboundText, optedOutChats } from "./handler.js";
 
 const port = config.port;
 const app = express();
-
-/** Chats that already got a first safe outbound (no links). */
-const chatsWithOutbound = new Set<string>();
-/** Chats that opted out locally. */
-const optedOutChats = new Set<string>();
-/** Deduplicate webhook deliveries. */
 const seenEvents = new Set<string>();
-
-const FIRST_REPLY = "Hello from my agent!";
-const FOLLOW_UP_WITH_LINK =
-  "Nice — chat is open. Docs: https://docs.linqapp.com/getting-started/quickstart/";
 
 function headersToRecord(headers: Request["headers"]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -38,7 +29,6 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "linq-agent" });
 });
 
-// Raw body required for Standard Webhooks signature verification.
 app.post(
   "/webhook",
   express.raw({ type: "*/*" }),
@@ -47,7 +37,6 @@ app.post(
       ? req.body.toString("utf8")
       : String(req.body ?? "");
 
-    // Ack quickly; process after. Still verify first so bad requests 4xx.
     let event;
     try {
       const client = createLinqClient();
@@ -67,12 +56,10 @@ app.post(
       return;
     }
     seenEvents.add(event.event_id);
-
     console.log(`Event: ${event.event_type} (${event.event_id})`);
 
     if (event.event_type !== "message.received") return;
 
-    // SDK types event_type as the full union, so narrow explicitly.
     const data = event.data as {
       chat: { id: string; health_status?: { status?: string } | null };
       parts: Array<{ type: string; value?: string | null }>;
@@ -90,42 +77,10 @@ app.post(
       return;
     }
 
-    if (OPT_OUT_KEYWORDS.has(text) || /stop messaging me/i.test(text)) {
-      optedOutChats.add(chatId);
-      console.log(`Opt-out from ${from}; no further outbound`);
-      return;
-    }
-
     try {
-      const client = createLinqClient();
-      const isFirstOutbound = !chatsWithOutbound.has(chatId);
-
-      // Sandbox: first outbound must not include links, reply_to, or effects.
-      const replyText = isFirstOutbound ? FIRST_REPLY : `You said: ${text || "(non-text)"}`;
-
-      if (containsUrl(replyText) && isFirstOutbound) {
-        throw new Error("Refusing to send URL on first outbound message");
-      }
-
-      const sent = await client.chats.messages.send(chatId, {
-        message: {
-          parts: [{ type: "text", value: replyText }],
-        },
-      });
-      chatsWithOutbound.add(chatId);
-      console.log(`Replied to chat ${chatId}: message ${sent.message.id}`);
-
-      // After the chat exists and first safe message is sent, links are OK.
-      if (isFirstOutbound) {
-        const followUp = await client.chats.messages.send(chatId, {
-          message: {
-            parts: [{ type: "text", value: FOLLOW_UP_WITH_LINK }],
-          },
-        });
-        console.log(`Follow-up with link sent: ${followUp.message.id}`);
-      }
+      await handleInboundText(chatId, text);
     } catch (err) {
-      console.error("Failed to reply:", err);
+      console.error("Failed to handle inbound:", err);
     }
   },
 );
@@ -134,6 +89,6 @@ app.listen(port, () => {
   console.log(`Linq agent listening on http://localhost:${port}`);
   console.log(`Webhook path: POST /webhook?version=2026-02-03`);
   console.log(
-    `\nSandbox flow: text ${process.env.LINQ_PHONE_NUMBER || "your Linq number"} first, then this agent will reply.`,
+    `\nSandbox flow: text ${process.env.LINQ_PHONE_NUMBER || "your Linq number"} a song link for BPM analysis.`,
   );
 });

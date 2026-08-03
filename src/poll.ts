@@ -1,17 +1,12 @@
-import { config, OPT_OUT_KEYWORDS, containsUrl } from "./config.js";
+import { config } from "./config.js";
 import { createLinqClient } from "./linq.js";
-
-/**
- * Fallback when public tunnels flake: poll recent chats for new inbound
- * messages and reply the same way the webhook handler does.
- */
-const FIRST_REPLY = "Hello from my agent!";
-const FOLLOW_UP_WITH_LINK =
-  "Nice — chat is open. Docs: https://docs.linqapp.com/getting-started/quickstart/";
+import {
+  chatsWithOutbound,
+  handleInboundText,
+  optedOutChats,
+} from "./handler.js";
 
 const seenMessageIds = new Set<string>();
-const chatsWithOutbound = new Set<string>();
-const optedOutChats = new Set<string>();
 
 async function tick() {
   const client = createLinqClient();
@@ -29,7 +24,10 @@ async function tick() {
       if (seenMessageIds.has(message.id)) continue;
       seenMessageIds.add(message.id);
 
-      if (message.is_from_me) continue;
+      if (message.is_from_me) {
+        chatsWithOutbound.add(chatId);
+        continue;
+      }
 
       const text = (message.parts ?? [])
         .map((p) => (p.type === "text" && "value" in p && typeof p.value === "string" ? p.value : ""))
@@ -39,36 +37,13 @@ async function tick() {
 
       console.log(`[poll] inbound chat=${chatId} msg=${message.id}: ${JSON.stringify(text)}`);
 
-      if (OPT_OUT_KEYWORDS.has(text) || /stop messaging me/i.test(text)) {
-        optedOutChats.add(chatId);
-        console.log(`[poll] opt-out chat=${chatId}`);
-        continue;
-      }
-
       const ageMs = Date.now() - new Date(message.sent_at ?? message.created_at).getTime();
-      if (ageMs > 60_000) {
+      if (ageMs > 90_000) {
         console.log(`[poll] skip old message (${Math.round(ageMs / 1000)}s)`);
         continue;
       }
 
-      const isFirstOutbound = !chatsWithOutbound.has(chatId);
-      const replyText = isFirstOutbound ? FIRST_REPLY : `You said: ${text || "(non-text)"}`;
-      if (containsUrl(replyText) && isFirstOutbound) {
-        throw new Error("Refusing to send URL on first outbound message");
-      }
-
-      const sent = await client.chats.messages.send(chatId, {
-        message: { parts: [{ type: "text", value: replyText }] },
-      });
-      chatsWithOutbound.add(chatId);
-      console.log(`[poll] replied ${sent.message.id}`);
-
-      if (isFirstOutbound) {
-        const followUp = await client.chats.messages.send(chatId, {
-          message: { parts: [{ type: "text", value: FOLLOW_UP_WITH_LINK }] },
-        });
-        console.log(`[poll] follow-up ${followUp.message.id}`);
-      }
+      await handleInboundText(chatId, text);
     }
   }
 }

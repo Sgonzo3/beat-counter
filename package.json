@@ -10,6 +10,7 @@
     "subscribe": "tsx src/subscribe.ts",
     "send": "tsx src/send.ts",
     "poll": "tsx src/poll.ts",
+    "analyze": "bash scripts/analyze-bpm.sh",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
