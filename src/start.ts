@@ -164,17 +164,15 @@ async function main() {
 
   console.log(`
 ============================================================
-  Sandbox is ready (inbound-first)
+  SoundCloud BPM agent ready (inbound-first)
 
   1. From your iPhone, text your Linq number:
        ${linqNumber}
 
-  2. This agent will reply with:
-       "Hello from my agent!"
-     then a follow-up that may include a link (safe once the chat exists).
+  2. Send a SoundCloud track link, e.g.
+       https://soundcloud.com/forss/flickermood
 
-  3. Optional manual send after they've texted you:
-       npm run send -- <yourPhoneE164>
+  3. Agent replies with avg BPM + major tempo-change timestamps.
 
   Webhook: ${publicUrl}/webhook?version=2026-02-03
   Fallback: polling chats every 5s if webhooks flake

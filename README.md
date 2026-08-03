@@ -1,40 +1,24 @@
-# Linq BPM agent (sandbox)
+# Linq SoundCloud BPM agent
 
-Text a YouTube / YouTube Music / Spotify track link to your Linq number and get back **average BPM** plus **timestamps for major tempo changes**, analyzed locally with [Essentia](https://essentia.upf.edu/).
+Text a **SoundCloud** track link to your Linq number and get back **average BPM** plus **timestamps for major tempo changes**, analyzed locally with [Essentia](https://essentia.upf.edu/).
 
-## How it works
+## Flow
 
-1. Inbound iMessage via Linq webhook (or 5s poll fallback)
-2. Detect song URL
-3. Download audio with `yt-dlp` (Spotify → oEmbed title → YouTube search)
-4. Analyze with Essentia `RhythmExtractor2013`
-5. Reply over Linq with avg BPM + change timeline
-
-## Sandbox rules
-
-- **Inbound-first** — text the Linq number before the agent can message you
-- **No links on first outbound** — first reply is plain text; analysis replies come after
-- Up to 100 contacts; number active 7 days; unlimited messages
+1. User texts your Linq number first (sandbox inbound-first)
+2. User sends a `soundcloud.com` (or `on.soundcloud.com`) track link
+3. Agent downloads audio with `yt-dlp`
+4. Essentia `RhythmExtractor2013` computes avg BPM + tempo-change map
+5. Agent replies over Linq
 
 ## Setup
 
 ```bash
 cp .env.example .env
-# LINQ_API_KEY + LINQ_PHONE_NUMBER from https://dashboard.linqapp.com/sandbox-signup
+# LINQ_API_KEY + LINQ_PHONE_NUMBER
 npm install
-pip3 install -r requirements.txt   # essentia, yt-dlp, numpy
-# ffmpeg required on PATH
+pip3 install -r requirements.txt
+# ffmpeg + yt-dlp on PATH
 ```
-
-### YouTube bot checks / Spotify preview
-
-Some hosts (including many cloud VMs) get blocked by YouTube. Export browser cookies to a Netscape `cookies.txt` and set:
-
-```bash
-YTDLP_COOKIES=/workspace/cookies.txt
-```
-
-Without cookies, **Spotify links still work** via the public 30s preview (`p.scdn.co`) — enough for average BPM, with a note that the full-track tempo map isn’t available.
 
 ## Run
 
@@ -42,34 +26,34 @@ Without cookies, **Spotify links still work** via the public 30s preview (`p.scd
 npm start
 ```
 
-Then text your Linq number a track link, e.g.:
+Then text `+1…` (your Linq sandbox number) a link like:
 
-- `https://www.youtube.com/watch?v=…`
-- `https://music.youtube.com/watch?v=…`
-- `https://open.spotify.com/track/…`
+```
+https://soundcloud.com/forss/flickermood
+```
 
-### Analyze locally (no Linq)
+### Analyze without Linq
 
 ```bash
 npm run analyze -- https://soundcloud.com/forss/flickermood
-npm run analyze -- ./song.wav
 ```
 
-## Scripts
+## Sandbox rules
 
-| Script | What it does |
-|--------|----------------|
-| `npm start` | Tunnel + webhook + poll fallback |
-| `npm run server` | Webhook server only |
-| `npm run poll` | Poll chats for inbound (fallback) |
-| `npm run analyze` | Run Essentia BPM analysis CLI |
-| `npm run send` | Manual `POST /v3/chats` send |
-| `npm run subscribe` | Create webhook subscription |
+- Inbound-first
+- No links / effects on the first outbound message
+- Opt-out keywords (`STOP`, etc.) stop replies
+
+## Notes
+
+- **SoundCloud is the primary supported source** (works on this host without cookies)
+- Spotify / YouTube still parse, but the agent asks for SoundCloud for best results
+- Optional: `YTDLP_COOKIES=/workspace/cookies.txt` if you later expand back to YouTube
 
 ## Example reply
 
 ```
-Artist — Track Title
+Forss — Flickermood
 Avg BPM: 148.0 (confidence 2.11)
 Major BPM changes:
   0:00 → 147.7 BPM

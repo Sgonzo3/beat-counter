@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download a song link (YouTube / YT Music / Spotify) and analyze BPM with Essentia.
+"""Download a song link (SoundCloud first; Spotify/YouTube optional) and analyze BPM with Essentia.
 
 Outputs JSON:
 {
@@ -39,6 +39,10 @@ SPOTIFY_RE = re.compile(
 )
 YOUTUBE_RE = re.compile(
     r"https?://(?:(?:www|m|music)\.)?(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([a-zA-Z0-9_-]{6,})",
+    re.I,
+)
+SOUNDCLOUD_RE = re.compile(
+    r"https?://(?:(?:www|m|on)\.)?soundcloud\.com/[^\s<>\"']+",
     re.I,
 )
 GENERIC_URL_RE = re.compile(r"https?://\S+", re.I)
@@ -226,7 +230,12 @@ def download_ytdlp(target: str, out_dir: Path) -> tuple[Path, dict]:
 
 
 def acquire_audio(url: str, out_dir: Path) -> tuple[Path, dict]:
-    """Resolve a song URL to a local wav + metadata."""
+    """Resolve a song URL to a local wav + metadata. SoundCloud is the primary path."""
+    if SOUNDCLOUD_RE.search(url) or "soundcloud.com" in url.lower():
+        path, meta = download_ytdlp(url, out_dir)
+        meta.setdefault("source", "soundcloud")
+        return path, meta
+
     if SPOTIFY_RE.search(url):
         preview = download_spotify_preview(url, out_dir)
         if preview:
@@ -234,7 +243,6 @@ def acquire_audio(url: str, out_dir: Path) -> tuple[Path, dict]:
         title = spotify_oembed_title(url)
         if not title:
             die("Could not resolve Spotify track (no preview / title)")
-        # Fallback: YouTube search (needs cookies on this host).
         path, meta = download_ytdlp(f"ytsearch1:{title}", out_dir)
         meta.setdefault("title", title)
         return path, meta
@@ -245,7 +253,7 @@ def acquire_audio(url: str, out_dir: Path) -> tuple[Path, dict]:
     if url.startswith("http"):
         return download_ytdlp(url, out_dir)
 
-    die(f"Unsupported URL (need YouTube, YouTube Music, or Spotify track): {url}")
+    die("Unsupported URL — send a SoundCloud track link (soundcloud.com/...)")
 
 
 def format_ts(seconds: float) -> str:

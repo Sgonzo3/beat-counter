@@ -2,7 +2,7 @@ import { config } from "./config.js";
 import { createLinqClient } from "./linq.js";
 import {
   chatsWithOutbound,
-  handleInboundText,
+  handleInboundMessage,
   optedOutChats,
 } from "./handler.js";
 
@@ -29,9 +29,14 @@ async function tick() {
         continue;
       }
 
-      const text = (message.parts ?? [])
-        .map((p) => (p.type === "text" && "value" in p && typeof p.value === "string" ? p.value : ""))
-        .filter(Boolean)
+      const parts = (message.parts ?? []).map((p) => ({
+        type: p.type,
+        value: "value" in p && typeof p.value === "string" ? p.value : null,
+      }));
+
+      const text = parts
+        .filter((p) => p.type === "text" && p.value)
+        .map((p) => p.value as string)
         .join("\n")
         .trim();
 
@@ -43,7 +48,7 @@ async function tick() {
         continue;
       }
 
-      await handleInboundText(chatId, text);
+      await handleInboundMessage(chatId, text, parts);
     }
   }
 }
@@ -51,7 +56,7 @@ async function tick() {
 async function main() {
   config.apiKey();
   config.linqNumber();
-  console.log("Polling for inbound messages every 5s (webhook fallback)...");
+  console.log("Polling for SoundCloud links every 5s (webhook fallback)...");
 
   const client = createLinqClient();
   for await (const chat of client.chats.listChats({ from: config.linqNumber(), limit: 50 })) {

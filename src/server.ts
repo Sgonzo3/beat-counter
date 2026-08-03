@@ -2,7 +2,7 @@ import express from "express";
 import type { Request, Response } from "express";
 import { config } from "./config.js";
 import { createLinqClient } from "./linq.js";
-import { handleInboundText, optedOutChats } from "./handler.js";
+import { handleInboundMessage, optedOutChats } from "./handler.js";
 
 const port = config.port;
 const app = express();
@@ -26,7 +26,7 @@ function extractText(parts: ReadonlyArray<{ type: string; value?: string | null 
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "linq-agent" });
+  res.json({ ok: true, service: "linq-agent", focus: "soundcloud" });
 });
 
 app.post(
@@ -67,7 +67,8 @@ app.post(
     };
     const chatId = data.chat.id;
     const health = data.chat.health_status?.status;
-    const text = extractText(data.parts);
+    const parts = data.parts ?? [];
+    const text = extractText(parts);
     const from = data.sender_handle?.handle;
 
     console.log(`Inbound from ${from} chat=${chatId}: ${JSON.stringify(text)}`);
@@ -78,7 +79,7 @@ app.post(
     }
 
     try {
-      await handleInboundText(chatId, text);
+      await handleInboundMessage(chatId, text, parts);
     } catch (err) {
       console.error("Failed to handle inbound:", err);
     }
@@ -89,6 +90,6 @@ app.listen(port, () => {
   console.log(`Linq agent listening on http://localhost:${port}`);
   console.log(`Webhook path: POST /webhook?version=2026-02-03`);
   console.log(
-    `\nSandbox flow: text ${process.env.LINQ_PHONE_NUMBER || "your Linq number"} a song link for BPM analysis.`,
+    `\nText ${process.env.LINQ_PHONE_NUMBER || "your Linq number"} a SoundCloud link for BPM analysis.`,
   );
 });
